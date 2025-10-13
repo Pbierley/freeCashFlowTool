@@ -51,7 +51,10 @@ def format_currency(value, decimals=0):
         return f"${value:,.{decimals}f}"
 
 def create_fcf_chart(data, subtract_sbc=False):
-    """Create interactive FCF chart with toggle for SBC."""
+    """
+    Create interactive FCF chart using stacked bars.
+    The stack visualizes FCF + CapEx = CFO.
+    """
     fcf_data = data.get("free_cash_flow_annual", [])
     sbc_data = data.get("stock_based_compensation_annual", [])
     
@@ -67,48 +70,50 @@ def create_fcf_chart(data, subtract_sbc=False):
     df["sbc"] = df["year"].map(sbc_dict).fillna(0)
     df["fcf_minus_sbc"] = df["value"] - df["sbc"]
     
+    # Determine the FCF component to plot (base of the stack)
+    if subtract_sbc:
+        df["fcf_to_plot"] = df["fcf_minus_sbc"]
+        fcf_label = "FCF (after SBC)"
+    else:
+        df["fcf_to_plot"] = df["value"]
+        fcf_label = "FCF (before SBC)"
+    
+    # The CapEx component (stacked on top)
+    # CFO = FCF + CapEx (where CapEx is a positive outflow amount)
+    df["capex_to_plot"] = df["capex"]
+    
+    # Calculate the total height for reference (CFO)
+    df["cfo_total"] = df["fcf_to_plot"] + df["capex_to_plot"]
+
     # Create figure
     fig = go.Figure()
     
-    # Add FCF bars
+    # 1. Add FCF bars (Bottom component)
     fig.add_trace(go.Bar(
         x=df["year"],
-        y=df["value"] if not subtract_sbc else df["fcf_minus_sbc"],
-        name="FCF" if not subtract_sbc else "FCF - SBC",
-        marker_color="#1f77b4",
+        y=df["fcf_to_plot"],
+        name=fcf_label,
+        marker_color="#1f77b4", # Blue
         hovertemplate="<b>Year %{x}</b><br>" +
                       "FCF: %{y:,.0f}<br>" +
                       "<extra></extra>"
     ))
     
-    # Add CFO line
-    fig.add_trace(go.Scatter(
+    # 2. Add CapEx bars (Top component, stacked)
+    fig.add_trace(go.Bar(
         x=df["year"],
-        y=df["cfo"],
-        name="Cash from Operations",
-        mode="lines+markers",
-        line=dict(color="#2ca02c", width=2),
-        marker=dict(size=8),
-        hovertemplate="<b>Year %{x}</b><br>" +
-                      "CFO: %{y:,.0f}<br>" +
-                      "<extra></extra>"
-    ))
-    
-    # Add CapEx line (negative)
-    fig.add_trace(go.Scatter(
-        x=df["year"],
-        y=-df["capex"],
-        name="CapEx (negative)",
-        mode="lines+markers",
-        line=dict(color="#d62728", width=2, dash="dash"),
-        marker=dict(size=8),
+        y=df["capex_to_plot"],
+        name="Capital Expenditure",
+        marker_color="#2ca02c", # Green color for the difference
         hovertemplate="<b>Year %{x}</b><br>" +
                       "CapEx: %{y:,.0f}<br>" +
-                      "<extra></extra>"
+                      "CFO (Total): %{customdata:,.0f}<br>" +
+                      "<extra></extra>",
+        customdata=df["cfo_total"]
     ))
     
+    # Optional: Add SBC line (negative) if subtracting SBC
     if subtract_sbc:
-        # Add SBC line (negative)
         fig.add_trace(go.Scatter(
             x=df["year"],
             y=-df["sbc"],
@@ -122,9 +127,10 @@ def create_fcf_chart(data, subtract_sbc=False):
         ))
     
     fig.update_layout(
-        title="Free Cash Flow Analysis (Past 5 Years)",
+        title="Cash Flow Composition: FCF + CapEx = CFO (Past 5 Years)",
         xaxis_title="Year",
         yaxis_title="Amount (USD)",
+        barmode='stack', # Key setting for stacked bar chart
         hovermode="x unified",
         template="plotly_white",
         height=500,
@@ -341,7 +347,7 @@ def main():
     st.markdown("---")
     
     # Free Cash Flow Chart
-    st.subheader("Free Cash Flow Analysis")
+    st.subheader("Cash Flow Composition (FCF + CapEx = CFO)")
     fcf_chart = create_fcf_chart(data, subtract_sbc)
     if fcf_chart:
         st.plotly_chart(fcf_chart, use_container_width=True)
