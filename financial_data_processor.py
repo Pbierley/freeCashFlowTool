@@ -1,201 +1,128 @@
-import streamlit as st
-import plotly.graph_objects as go
-import plotly.express as px
-import os
-from dotenv import load_dotenv
+import pandas as pd
+import requests
+from datetime import datetime
+from functools import lru_cache # Used for caching outside of Streamlit
 
-# Assuming FinancialDataProcessor is in a separate file or included above
-# from financial_data_processor import FinancialDataProcessor 
-
-# --- CONFIGURATION AND SETUP ---
-# Load environment variables
-load_dotenv()
-FMP_API_KEY = os.getenv("FMP_API_KEY")
-POLYGON_API_KEY = os.getenv("POLYGON_API_KEY")
-
-st.set_page_config(page_title="Stock Analysis Dashboard", layout="wide")
-st.title("📊 Stock Analysis Dashboard")
-
-# Initialize the data processor (Encapsulation of API access)
-if FMP_API_KEY and POLYGON_API_KEY:
-    processor = FinancialDataProcessor(FMP_API_KEY, POLYGON_API_KEY)
-else:
-    processor = None
-    st.warning("Please set FMP_API_KEY and POLYGON_API_KEY in your .env file.")
-
-# --- UI RENDERING FUNCTIONS (Single Responsibility) ---
-
-def render_overview_metrics(info, quote_data):
-    """Renders the company name and key financial metrics."""
-    st.header(f"{info.get('companyName', info.get('symbol', 'N/A'))}")
+class FinancialDataProcessor:
+    """
+    Manages all data fetching, cleaning, and calculation logic 
+    for the stock analysis dashboard.
+    """
     
-    col1, col2, col3, col4 = st.columns(4)
-    market_cap = info.get('mktCap', 0)
-    price = info.get('price', 0)
-    changes = quote_data[0].get('change', 0) if quote_data else 0
-    
-    with col1:
-        st.metric("Ticker", info.get('symbol', 'N/A'))
-    with col2:
-        st.metric("Market Cap", f"${market_cap/1e9:.2f}B" if market_cap else "N/A")
-    with col3:
-        st.metric("Share Price", f"${price:.2f}" if price else "N/A")
-    with col4:
-        st.metric("Change", f"${changes:.2f}" if changes else "N/A", 
-                  delta=f"{changes:.2f}" if changes else None)
-    st.divider()
+    FMP_BASE_URL = "https://financialmodelingprep.com/stable"
+    POLYGON_BASE_URL = "https://api.polygon.io/v2"
 
-def render_price_chart(historical_data, quote_data):
-    """Renders the 5-year stock price chart and daily metrics."""
-    st.subheader("📈 Stock Price History (5 Years)")
-    try:
-        results = historical_data.get('results', [])
-        if not results:
-            st.info("Price history not available.")
-            return
+    def __init__(self, fmp_api_key, polygon_api_key):
+        self._fmp_key = fmp_api_key
+        self._polygon_key = polygon_api_key
 
-        # Data Preparation
-        price_df = pd.DataFrame(results)
-        price_df['date'] = pd.to_datetime(price_df['t'], unit='ms')
-        price_df['close'] = price_df['c']
-        monthly_df = price_df.set_index('date').resample('ME').last().reset_index()
+    # --- API FETCHERS (Using lru_cache for pure function caching) ---
 
-        # Chart Logic
-        fig_price = go.Figure()
-        fig_price.add_trace(go.Scatter(x=monthly_df['date'], y=monthly_df['close'], 
-                                       mode='lines', name='Close Price', line=dict(color='#1f77b4')))
-        fig_price.update_layout(height=400, yaxis_title="Price ($)", showlegend=False)
-        st.plotly_chart(fig_price, use_container_width=True)
+    @lru_cache(maxsize=32)
+    def _fetch_data(self, endpoint, ticker, api_key, params=None):
+        """Generic function for fetching data from FMP or Polygon."""
+        url = f"{self.FMP_BASE_URL}/{endpoint}?symbol={ticker}" if 'polygon' not in endpoint else endpoint
         
-        # Daily Metrics
-        if quote_data and quote_data[0]:
-            quote = quote_data[0]
-            col1, col2, col3, col4 = st.columns(4)
-            with col1: st.metric("Current Price", f"${quote.get('price', 0):.2f}")
-            with col2: st.metric("Day Change %", f"{quote.get('changesPercentage', 0):.2f}%", 
-                                 delta=f"{quote.get('change', 0):.2f}")
-            with col3: st.metric("Day High", f"${quote.get('dayHigh', 0):.2f}")
-            with col4: st.metric("Day Low", f"${quote.get('dayLow', 0):.2f}")
-            
-    except Exception as e:
-        st.error(f"Error rendering price chart: {e}")
+        default_params = {"apikey": api_key}
+        if params:
+            default_params.update(params)
+        
+        response = requests.get(url, params=default_params)
+        response.raise_for_status()
+        return response.json()
 
-def render_metric_chart(df, metric_col, title, y_label, cagr_periods=None):
-    """Generic function to render a bar chart and its corresponding CAGRs."""
-    st.subheader(f"💰 {title}")
+    def get_stock_info(self, ticker):
+        return self._fetch_data("profile", ticker, self._fmp_key)
+
+    def get_income_statement(self, ticker, period="annual", limit=5):
+        return self._fetch_data("income-statement", ticker, self._fmp_key, 
+                                params={"period": period, "limit": limit})
+
+    def get_cash_flow(self, ticker, limit=5):
+        return self._fetch_data("cash-flow-statement", ticker, self._fmp_key, 
+                                params={"limit": limit})
+
+    def get_historical_chart(self, ticker):
+        """Fetches 5 years of daily price data from Polygon."""
+        end_date = datetime.now().strftime('%Y-%m-%d')
+        start_date = (datetime.now() - pd.DateOffset(years=5)).strftime('%Y-%m-%d')
+        
+        # Polygon API requires the URL format to be different
+        url = f"{self.POLYGON_BASE_URL}/aggs/ticker/{ticker}/range/1/day/{start_date}/{end_date}"
+        return self._fetch_data(url, ticker, self._polygon_key, 
+                                params={"adjusted": "true", "sort": "asc"})
+
+    # --- DATA PROCESSING & TRANSFORMATION ---
+
+    def _prepare_financial_df(self, data):
+        """Converts raw financial API data to a cleaned, sorted DataFrame."""
+        if not data:
+            return pd.DataFrame()
+        df = pd.DataFrame(data)
+        if 'date' in df.columns:
+            df['date'] = pd.to_datetime(df['date'])
+            df = df.sort_values('date', ascending=True).reset_index(drop=True)
+        return df
+
+    def process_all_financial_data(self, ticker):
+        """Fetches and processes all necessary financial statements."""
+        raw_income = self.get_income_statement(ticker)
+        raw_cash_flow = self.get_cash_flow(ticker)
+        
+        return {
+            'income_df': self._prepare_financial_df(raw_income),
+            'cashflow_df': self._prepare_financial_df(raw_cash_flow)
+        }
+
+    # --- FINANCIAL CALCULATIONS ---
     
-    if df.empty or metric_col not in df.columns or not df[metric_col].any():
-        st.info(f"No {title} data available.")
-        return
+    @staticmethod
+    def calculate_cagr(start_value, end_value, years):
+        """Calculates Compound Annual Growth Rate."""
+        if start_value <= 0 or end_value <= 0 or years <= 0:
+            return None
+        return (((end_value / start_value) ** (1 / years)) - 1) * 100
 
-    # Chart
-    fig = px.bar(df, x='date', y=metric_col, 
-                 labels={metric_col: y_label, 'date': 'Year'})
-    fig.update_layout(height=400, showlegend=False)
-    st.plotly_chart(fig, use_container_width=True)
-    
-    # CAGRs
-    if cagr_periods and not df.empty:
-        cagrs = processor.calculate_cagrs(df, metric_col, periods=cagr_periods)
-        if cagrs:
-            cols = st.columns(len(cagrs))
-            for i, (period, value) in enumerate(cagrs.items()):
-                cols[i].metric(f"{title} CAGR {period}", value)
+    def calculate_cagrs(self, df, metric_col, periods=[1, 2, 3, 5]):
+        """Calculates CAGR for a given metric column over multiple periods."""
+        cagrs = {}
+        for period in periods:
+            # Need (period + 1) data points to calculate 'period' years of growth
+            if len(df) > period:
+                end_val = df[metric_col].iloc[-1]
+                start_val = df[metric_col].iloc[-(period + 1)]
+                cagr = self.calculate_cagr(start_val, end_val, period)
+                if cagr is not None:
+                    cagrs[f"{period}Y"] = f"{cagr:.2f}%"
+        return cagrs
 
-def render_fcf_yield(cashflow_df, market_cap):
-    """Renders FCF Yield chart and metrics."""
-    st.subheader("💰 Free Cash Flow Yield")
-    
-    if cashflow_df.empty or 'fcf_yield' not in cashflow_df.columns:
-        st.info("FCF Yield calculation requires FCF, SBC, and Market Cap data.")
-        return
-
-    fig_fcf_yield = px.bar(
-        cashflow_df, x='date', y='fcf_yield',
-        labels={'fcf_yield': 'FCF Yield (%)', 'date': 'Year'},
-        color_discrete_sequence=px.colors.qualitative.T10 # Change color for variety
-    )
-    fig_fcf_yield.update_layout(height=400, showlegend=False)
-    st.plotly_chart(fig_fcf_yield, use_container_width=True)
-    
-    # Metrics
-    if not cashflow_df.empty:
-        avg_yield = cashflow_df['fcf_yield'].mean()
-        latest_yield = cashflow_df['fcf_yield'].iloc[-1]
-        col1, col2 = st.columns(2)
-        with col1: st.metric("Average FCF Yield", f"{avg_yield:.2f}%")
-        with col2: st.metric("Latest FCF Yield", f"{latest_yield:.2f}%")
-
-
-# --- MAIN EXECUTION ---
-with st.sidebar:
-    st.header("Stock Selection")
-    ticker = st.text_input("Enter Stock Ticker", value="AAPL").upper()
-    if st.button("Analyze Stock", type="primary"):
-        st.session_state['ticker'] = ticker
-        st.rerun()
-
-# Use session state to hold the ticker and prevent rerunning analysis if the page reloads
-if 'ticker' not in st.session_state:
-    st.session_state['ticker'] = ticker
-
-if st.session_state['ticker'] and processor:
-    try:
-        with st.spinner(f"Fetching data for {st.session_state['ticker']}..."):
-            # 1. Fetch Core Data
-            stock_info = processor.get_stock_info(st.session_state['ticker'])
-            quote_data = processor._fetch_data("quote", st.session_state['ticker'], FMP_API_KEY)
-            historical_data = processor.get_historical_chart(st.session_state['ticker'])
+    def calculate_derived_metrics(self, data_dict, market_cap, price):
+        """Calculates and adds P/E, Margins, and FCF-SBC to DataFrames."""
+        income_df = data_dict['income_df']
+        cashflow_df = data_dict['cashflow_df']
+        
+        # 1. P/E Ratio (Uses latest price and historical EPS)
+        if 'epsDiluted' in income_df.columns and price > 0:
+            income_df['pe'] = price / income_df['epsDiluted']
+            income_df['pe'].replace([float('inf'), -float('inf')], float('nan'), inplace=True)
             
-            # 2. Get Market Cap and Price from info
-            info = stock_info[0] if stock_info else {}
-            market_cap = info.get('mktCap', 0) or info.get('marketCap', 0)
-            price = info.get('price', 0)
+        # 2. Profit Margins
+        if 'revenue' in income_df.columns and income_df['revenue'].any() > 0:
+            for metric, col_name in [('grossProfit', 'grossProfitRatio'), 
+                                     ('operatingIncome', 'operatingIncomeRatio'), 
+                                     ('netIncome', 'netIncomeRatio')]:
+                if metric in income_df.columns:
+                    income_df[col_name] = income_df[metric] / income_df['revenue'] * 100
+        
+        # 3. FCF - SBC and FCF Yield
+        if 'freeCashFlow' in cashflow_df.columns and 'stockBasedCompensation' in cashflow_df.columns:
+            cashflow_df['fcf_minus_sbc'] = (
+                cashflow_df['freeCashFlow'] - cashflow_df['stockBasedCompensation']
+            )
             
-            # 3. Process Financial Statements
-            data_dict = processor.process_all_financial_data(st.session_state['ticker'])
-            data_dict = processor.calculate_derived_metrics(data_dict, market_cap, price)
-            
-            income_df = data_dict['income_df']
-            cashflow_df = data_dict['cashflow_df']
-
-        # --- RENDERING ---
-        if info:
-            render_overview_metrics(info, quote_data)
-            render_price_chart(historical_data, quote_data)
-
-            # Revenue and EPS
-            render_metric_chart(income_df, 'revenue', "Revenue", "Revenue ($)", cagr_periods=[1, 3, 5])
-            render_metric_chart(income_df, 'epsDiluted', "Diluted EPS", "Diluted EPS ($)", cagr_periods=[1, 3, 5])
-            
-            # P/E Ratio
-            render_metric_chart(income_df, 'pe', "P/E Ratio (Historical)", "P/E Ratio")
-            
-            # Shares Outstanding
-            render_metric_chart(income_df, 'weightedAverageShsOutDil', "Shares Outstanding", "Shares Outstanding", cagr_periods=[1, 3, 5])
-
-            # FCF with Toggle
-            fcf_option = st.radio("FCF Metric:", ["Free Cash Flow", "FCF - SBC"], horizontal=True, key="fcf_radio")
-            fcf_col = 'fcf_minus_sbc' if fcf_option == "FCF - SBC" else 'freeCashFlow'
-            render_metric_chart(cashflow_df, fcf_col, fcf_option, f"{fcf_option} ($)", cagr_periods=[1, 3, 5])
-
-            # FCF Yield
-            render_fcf_yield(cashflow_df, market_cap)
-
-            # Margins with Toggle
-            margin_option = st.radio("Select Margin:", ["Gross Margin", "Operating Margin", "Net Margin"], horizontal=True, key="margin_radio")
-            margin_map = {"Gross Margin": 'grossProfitRatio', "Operating Margin": 'operatingIncomeRatio', "Net Margin": 'netIncomeRatio'}
-            render_metric_chart(income_df, margin_map[margin_option], margin_option, f"{margin_option} (%)")
-
-        else:
-            st.error("No data found for this ticker.")
-            
-    except requests.exceptions.HTTPError as e:
-        if e.response.status_code == 404:
-            st.error(f"Stock ticker not found: {st.session_state['ticker']}")
-        else:
-            st.error(f"Error fetching data: HTTP Status {e.response.status_code}")
-    except Exception as e:
-        st.error(f"An unexpected error occurred: {str(e)}")
-else:
-    st.info("👈 Enter a stock ticker in the sidebar to begin analysis.")
+            if market_cap > 0:
+                cashflow_df['fcf_yield'] = (
+                    cashflow_df['fcf_minus_sbc'] / market_cap
+                ) * 100
+        
+        return {'income_df': income_df, 'cashflow_df': cashflow_df}
