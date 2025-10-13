@@ -1,29 +1,24 @@
 #!/usr/bin/env python3
 """
-Minimal SEC EDGAR fetcher for FCF and SBC with resilient tag + unit handling.
-
-- Accuracy-first: Pulls tagged XBRL facts directly from EDGAR.
-- Single-responsibility functions with simple orchestration in `get_fcf_sbc_metrics`.
-- Improvements:
-  * Try multiple preferred tags per metric (CFO, CapEx, SBC).
-  * Accept USD-like units (e.g., 'USD', 'iso4217:USD').
-  * Keyword fallback scan when preferred tags are absent.
+SEC EDGAR Financial Data API
+Fetches comprehensive financial metrics from SEC filings and Yahoo Finance.
 """
 
 from __future__ import annotations
 import requests
+import yfinance as yf
 from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime
+import math
 
 # ----------------------------
-# Config
+# Configuration
 # ----------------------------
 
-SEC_SITE = "https://www.sec.gov"   # for static files like company_tickers.json
-SEC_DATA = "https://data.sec.gov"  # for API endpoints like /api/xbrl/companyfacts
-USER_AGENT = "FreeCashFlowApp/1.0 (p.bierley@yahoo.com)"  # <-- use your contact
+SEC_SITE = "https://www.sec.gov"
+SEC_DATA = "https://data.sec.gov"
+USER_AGENT = "FinancialDataApp/1.0 (p.bierley@yahoo.com)"
 
-# Preferred tag lists (ordered)
 TAG_CANDIDATES = {
     "cfo": [
         "us-gaap/NetCashProvidedByUsedInOperatingActivities",
@@ -35,247 +30,345 @@ TAG_CANDIDATES = {
     ],
     "sbc": [
         "us-gaap/ShareBasedCompensation",
-        "us-gaap/StockBasedCompensation",
         "us-gaap/AllocatedShareBasedCompensationExpense",
-        "us-gaap/ShareBasedCompensationExpense",
     ],
+    "eps": [
+        "us-gaap/EarningsPerShareBasic",
+        "us-gaap/EarningsPerShareDiluted",
+    ],
+    "shares": [
+        "EntityCommonStockSharesOutstanding",
+        "CommonStockSharesOutstanding",
+        "WeightedAverageNumberOfSharesOutstandingBasic",
+    ]
 }
 
 # ----------------------------
-# Low-level HTTP + helpers
+# HTTP Utilities
 # ----------------------------
 
 def _get_json(url: str) -> Any:
     """GET JSON with SEC-friendly headers."""
-    resp = requests.get(url, headers={"User-Agent": USER_AGENT, "Accept-Encoding": "gzip, deflate"})
+    resp = requests.get(
+        url,
+        headers={"User-Agent": USER_AGENT, "Accept-Encoding": "gzip, deflate"},
+        timeout=30
+    )
     resp.raise_for_status()
     return resp.json()
 
 def _normalize_ticker(ticker: str) -> str:
-    """Uppercase, strip spaces."""
+    """Normalize ticker to uppercase without spaces."""
     return ticker.strip().upper()
 
+def _normalize_cik(cik: str) -> str:
+    """Convert CIK to zero-padded 10-digit string."""
+    return cik.strip().zfill(10)
+
 # ----------------------------
-# Ticker → CIK
+# SEC Data Retrieval
 # ----------------------------
 
 def get_cik_for_ticker(ticker: str) -> str:
-    """
-    Resolve a ticker to a zero-padded 10-digit CIK using SEC's company_tickers.json.
-    """
+    """Resolve ticker to CIK using SEC's company_tickers.json."""
     t = _normalize_ticker(ticker)
-    url = f"{SEC_SITE}/files/company_tickers.json"
-    data = _get_json(url)
-
-    # The JSON is an object with integer keys "0","1",... each value has 'cik_str','ticker','title'
+    data = _get_json(f"{SEC_SITE}/files/company_tickers.json")
+    
     for _, row in data.items():
         if row.get("ticker", "").upper() == t:
             return str(row["cik_str"]).zfill(10)
-    raise ValueError(f"Ticker not found in SEC mapping: {t}")
-
-# ----------------------------
-# Company Facts (XBRL)
-# ----------------------------
+    
+    raise ValueError(f"Ticker not found: {t}")
 
 def get_company_facts(cik: str) -> Dict[str, Any]:
-    """Fetch the full Company Facts payload for the company."""
+    """Fetch complete Company Facts XBRL data."""
     url = f"{SEC_DATA}/api/xbrl/companyfacts/CIK{cik}.json"
     return _get_json(url)
 
-def _get_usdish_units(units_dict: dict) -> List[Dict[str, Any]]:
-    """
-    Return observations from any unit key that looks like USD, e.g. 'USD', 'iso4217:USD'.
-    """
-    if not isinstance(units_dict, dict):
-        return []
-    candidates: List[Dict[str, Any]] = []
-    for unit_key, obs in units_dict.items():
-        key_upper = str(unit_key).upper()
-        if "USD" in key_upper and isinstance(obs, list):
-            candidates.extend(obs)
-    return candidates
-
-def _get_facts_units(facts: Dict[str, Any], tag: str) -> List[Dict[str, Any]]:
-    """
-    Return list of fact observations for the given tag (USD-like units only).
-    Tag must be in 'namespace/name' form (e.g., 'us-gaap/StockBasedCompensation').
-    """
-    taxonomy, name = tag.split("/", 1)
-    by_tax = facts.get("facts", {}).get(taxonomy, {})
-    series = by_tax.get(name, {})
-    units = series.get("units", {})
-    return _get_usdish_units(units)  # list of dicts with 'fy','fp','val','end','form','frame', etc.
-
-# ----------------------------
-# Value selection logic
-# ----------------------------
-
-def _pick_latest_annual(values: List[Dict[str, Any]]) -> Optional[Tuple[float, Dict[str, Any]]]:
-    """
-    Choose the most recent annual (FY) value.
-    Returns (value, meta) or None.
-    """
-    annuals = [v for v in values if v.get("fp") == "FY" and isinstance(v.get("val"), (int, float))]
-    if not annuals:
-        return None
-    # Sort by fiscal year then end date
-    annuals.sort(key=lambda v: (int(v.get("fy", 0) or 0), v.get("end", "")))
-    latest = annuals[-1]
-    return float(latest["val"]), latest
-
-def _pick_ttm_from_quarters(values: List[Dict[str, Any]]) -> Optional[Tuple[float, List[Dict[str, Any]]]]:
-    """
-    Sum the last 4 quarterly (Q1/Q2/Q3/Q4) values as a simple TTM fallback.
-    Returns (sum, quarters_meta) or None.
-    """
-    quarters = [v for v in values if v.get("fp") in {"Q1", "Q2", "Q3", "Q4"} and isinstance(v.get("val"), (int, float))]
-    if len(quarters) < 1:
-        return None
-    def _parse_end(v):
-        try:
-            return datetime.fromisoformat(v.get("end", "1900-01-01"))
-        except Exception:
-            return datetime(1900, 1, 1)
-    quarters.sort(key=_parse_end)
-    last_four = quarters[-4:]
-    total = sum(float(v["val"]) for v in last_four)
-    return total, last_four
-
-def _available_usgaap_fact_names(facts: Dict[str, Any]) -> List[str]:
-    """List available us-gaap fact names (without the 'us-gaap/' prefix)."""
-    return list((facts.get("facts", {}).get("us-gaap", {}) or {}).keys())
-
-def _scan_for_keywords(facts: Dict[str, Any], keywords: List[str]) -> List[str]:
-    """
-    Return 'us-gaap/<name>' fact tags whose names contain ALL keywords (case-insensitive).
-    """
-    names = _available_usgaap_fact_names(facts)
-    picks: List[str] = []
-    for nm in names:
-        up = nm.lower()
-        if all(kw.lower() in up for kw in keywords):
-            picks.append(f"us-gaap/{nm}")
-    return picks
-
-def select_value_multi(
-    facts: Dict[str, Any],
-    preferred_tags: List[str],
-    keywords: List[str]
-) -> Tuple[float, Dict[str, Any], str, str]:
-    """
-    Try preferred tags in order; if none has USD-like values, try a keyword scan.
-    Returns (value, meta, basis, tag_used)
-    """
-    # 1) Try explicit preferred tags
-    for tag in preferred_tags:
-        vals = _get_facts_units(facts, tag)
-        if vals:
-            annual = _pick_latest_annual(vals)
-            if annual:
-                val, meta = annual
-                return val, meta, "annual", tag
-            ttm = _pick_ttm_from_quarters(vals)
-            if ttm:
-                val, meta_list = ttm
-                return val, {"quarters": meta_list}, "ttm", tag
-
-    # 2) Keyword fallback across all us-gaap facts
-    for tag in _scan_for_keywords(facts, keywords):
-        vals = _get_facts_units(facts, tag)
-        if vals:
-            annual = _pick_latest_annual(vals)
-            if annual:
-                val, meta = annual
-                return val, meta, "annual", tag
-            ttm = _pick_ttm_from_quarters(vals)
-            if ttm:
-                val, meta_list = ttm
-                return val, {"quarters": meta_list}, "ttm", tag
-
-    raise ValueError(f"No USD-like values for any tag matching {preferred_tags} or keywords={keywords}")
-
-# ----------------------------
-# Domain calculations
-# ----------------------------
-
-def compute_fcf(cfo: float, capex: float) -> float:
-    """FCF = Cash Flow from Operations − Capital Expenditures."""
-    return float(cfo) - float(capex)
-
-def compute_fcf_minus_sbc(fcf: float, sbc: float) -> float:
-    """FCF − Stock-Based Compensation."""
-    return float(fcf) - float(sbc)
-
-# ----------------------------
-# Orchestration
-# ----------------------------
-
-def get_fcf_sbc_metrics(ticker: str) -> Dict[str, Any]:
-    """
-    High-level function that:
-      1) maps ticker→CIK
-      2) fetches company facts
-      3) extracts CFO, CapEx, SBC (resilient selection)
-      4) computes FCF and FCF − SBC
-    Returns a dict with values and provenance.
-    """
-    cik = get_cik_for_ticker(ticker)
-    facts = get_company_facts(cik)
-
-    # CFO
-    cfo, cfo_meta, cfo_basis, cfo_tag = select_value_multi(
-        facts,
-        TAG_CANDIDATES["cfo"],
-        keywords=["net", "cash", "operating", "activities"]
-    )
-
-    # CapEx
-    capex, capex_meta, capex_basis, capex_tag = select_value_multi(
-        facts,
-        TAG_CANDIDATES["capex"],
-        keywords=["payments", "acquire", "property", "plant", "equipment"]
-    )
-
-    # SBC
-    sbc, sbc_meta, sbc_basis, sbc_tag = select_value_multi(
-        facts,
-        TAG_CANDIDATES["sbc"],
-        keywords=["share", "based", "compensation"]
-    )
-
-    fcf = compute_fcf(cfo, capex)
-    fcf_minus_sbc = compute_fcf_minus_sbc(fcf, sbc)
-
+def get_company_metadata(cik: str) -> Dict[str, Any]:
+    """Fetch company metadata from SEC submissions."""
+    url = f"{SEC_DATA}/submissions/CIK{cik}.json"
+    data = _get_json(url)
+    
     return {
-        "ticker": _normalize_ticker(ticker),
         "cik": cik,
-        "values": {
-            "cfo":  {"value": cfo,  "basis": cfo_basis,  "meta": cfo_meta,  "tag": cfo_tag},
-            "capex":{"value": capex,"basis": capex_basis,"meta": capex_meta,"tag": capex_tag},
-            "sbc":  {"value": sbc,  "basis": sbc_basis,  "meta": sbc_meta,  "tag": sbc_tag},
-            "fcf": {"value": fcf, "formula": "CFO - CapEx"},
-            "fcf_minus_sbc": {"value": fcf_minus_sbc, "formula": "(CFO - CapEx) - SBC"},
-        },
-        "source": {
-            "mapping": f"{SEC_SITE}/files/company_tickers.json",
-            "facts": f"{SEC_DATA}/api/xbrl/companyfacts/CIK{cik}.json",
-            "notes": "Values selected via preferred tag list with keyword fallback; USD-like units only."
-        },
+        "name": data.get("name"),
+        "tickers": data.get("tickers", []),
+        "sic": data.get("sic"),
+        "sicDescription": data.get("sicDescription"),
     }
 
 # ----------------------------
-# CLI usage
+# XBRL Data Extraction
+# ----------------------------
+
+def _get_usd_observations(units_dict: dict) -> List[Dict[str, Any]]:
+    """Extract observations with USD units."""
+    if not isinstance(units_dict, dict):
+        return []
+    
+    observations = []
+    for unit_key, obs in units_dict.items():
+        if "USD" in str(unit_key).upper() and isinstance(obs, list):
+            observations.extend(obs)
+    
+    return observations
+
+def _get_facts_for_tag(facts: Dict[str, Any], tag: str) -> List[Dict[str, Any]]:
+    """Get fact observations for a specific tag."""
+    taxonomy, name = tag.split("/", 1)
+    series = facts.get("facts", {}).get(taxonomy, {}).get(name, {})
+    units = series.get("units", {})
+    return _get_usd_observations(units)
+
+def _extract_annual_values(observations: List[Dict[str, Any]], years: int = 5) -> List[Dict[str, Any]]:
+    """Extract annual (FY) values for the past N years."""
+    annuals = [
+        obs for obs in observations 
+        if obs.get("fp") == "FY" and isinstance(obs.get("val"), (int, float))
+    ]
+    
+    annuals.sort(key=lambda x: (int(x.get("fy", 0) or 0), x.get("end", "")), reverse=True)
+    
+    result = []
+    for obs in annuals[:years]:
+        result.append({
+            "year": obs.get("fy"),
+            "value": float(obs["val"]),
+            "end_date": obs.get("end"),
+            "filed": obs.get("filed")
+        })
+    
+    return result
+
+def _extract_quarterly_values(observations: List[Dict[str, Any]], quarters: int = 20) -> List[Dict[str, Any]]:
+    """Extract quarterly values for the past N quarters."""
+    quarterlies = [
+        obs for obs in observations 
+        if obs.get("fp") in {"Q1", "Q2", "Q3", "Q4"} and isinstance(obs.get("val"), (int, float))
+    ]
+    
+    quarterlies.sort(key=lambda x: (int(x.get("fy", 0) or 0), x.get("end", "")), reverse=True)
+    
+    result = []
+    for obs in quarterlies[:quarters]:
+        result.append({
+            "year": obs.get("fy"),
+            "quarter": obs.get("fp"),
+            "value": float(obs["val"]),
+            "end_date": obs.get("end"),
+            "filed": obs.get("filed")
+        })
+    
+    return result
+
+def _try_multiple_tags(facts: Dict[str, Any], tags: List[str]) -> List[Dict[str, Any]]:
+    """Try multiple tags and return first non-empty result."""
+    for tag in tags:
+        observations = _get_facts_for_tag(facts, tag)
+        if observations:
+            return observations
+    return []
+
+# ----------------------------
+# Market Data
+# ----------------------------
+
+def get_shares_outstanding(facts: Dict[str, Any]) -> Optional[float]:
+    """Extract most recent shares outstanding from SEC data."""
+    # Try DEI (Document and Entity Information) first
+    dei_facts = facts.get("facts", {}).get("dei", {})
+    us_gaap_facts = facts.get("facts", {}).get("us-gaap", {})
+    
+    all_facts = {**dei_facts, **us_gaap_facts}
+    
+    for tag in TAG_CANDIDATES["shares"]:
+        if tag not in all_facts:
+            continue
+        
+        units = all_facts[tag].get("units", {})
+        shares_data = []
+        
+        # Look for 'shares' unit
+        for unit_key, observations in units.items():
+            if "shares" in unit_key.lower() and isinstance(observations, list):
+                shares_data.extend(observations)
+        
+        if not shares_data:
+            continue
+        
+        # Sort by end date to get most recent
+        shares_data.sort(key=lambda x: x.get("end", ""), reverse=True)
+        
+        for obs in shares_data:
+            val = obs.get("val")
+            if isinstance(val, (int, float)) and val > 0:
+                return float(val)
+    
+    return None
+
+def get_yahoo_quote(ticker: str) -> Dict[str, Any]:
+    """Fetch current quote from Yahoo Finance. Returns None if unavailable."""
+    try:
+        # Try alternate scraping method with requests
+        url = f"https://finance.yahoo.com/quote/{ticker}"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        }
+        
+        response = requests.get(url, headers=headers, timeout=10)
+        
+        # Simple parsing - look for price in the response
+        # This is a fallback and may not always work
+        if response.status_code == 200:
+            import re
+            # Try to find price patterns in the HTML
+            price_pattern = r'"regularMarketPrice":\{"raw":([\d.]+)'
+            market_cap_pattern = r'"marketCap":\{"raw":(\d+)'
+            
+            price_match = re.search(price_pattern, response.text)
+            cap_match = re.search(market_cap_pattern, response.text)
+            
+            if price_match:
+                return {
+                    "price": float(price_match.group(1)),
+                    "currency": "USD",
+                    "market_cap": int(cap_match.group(1)) if cap_match else None,
+                    "exchange": None,
+                }
+        
+        return None
+        
+    except Exception:
+        return None
+
+# ----------------------------
+# Main API Function
+# ----------------------------
+
+def get_financial_data(ticker: str) -> Dict[str, Any]:
+    """
+    Fetch comprehensive financial data for a stock.
+    
+    Returns JSON with:
+    - Stock name, ticker, price, market cap
+    - Quarterly EPS for past 5 years
+    - Annual FCF, CapEx, SBC for past 5 years
+    """
+    try:
+        # Get CIK and metadata
+        cik = get_cik_for_ticker(ticker)
+        metadata = get_company_metadata(cik)
+        facts = get_company_facts(cik)
+        
+        # Try to get market data from Yahoo (optional)
+        market_data = get_yahoo_quote(ticker)
+        
+        # Get shares outstanding from SEC
+        shares_outstanding = get_shares_outstanding(facts)
+        
+        # Determine price and market cap
+        price = None
+        market_cap = None
+        currency = "USD"
+        exchange = None
+        
+        if market_data:
+            price = market_data.get("price")
+            market_cap = market_data.get("market_cap")
+            currency = market_data.get("currency", "USD")
+            exchange = market_data.get("exchange")
+        
+        # Calculate market cap from shares if we have price and shares but no market cap
+        if market_cap is None and price and shares_outstanding:
+            market_cap = price * shares_outstanding
+        
+        # Extract EPS (quarterly, past 5 years = 20 quarters)
+        eps_observations = _try_multiple_tags(facts, TAG_CANDIDATES["eps"])
+        eps_quarterly = _extract_quarterly_values(eps_observations, quarters=20)
+        
+        # Extract annual metrics (past 5 years)
+        cfo_observations = _try_multiple_tags(facts, TAG_CANDIDATES["cfo"])
+        capex_observations = _try_multiple_tags(facts, TAG_CANDIDATES["capex"])
+        sbc_observations = _try_multiple_tags(facts, TAG_CANDIDATES["sbc"])
+        
+        cfo_annual = _extract_annual_values(cfo_observations, years=5)
+        capex_annual = _extract_annual_values(capex_observations, years=5)
+        sbc_annual = _extract_annual_values(sbc_observations, years=5)
+        
+        # Calculate FCF for each year
+        fcf_annual = []
+        for cfo_year in cfo_annual:
+            year = cfo_year["year"]
+            capex_year = next((c for c in capex_annual if c["year"] == year), None)
+            
+            if capex_year:
+                fcf_value = cfo_year["value"] - capex_year["value"]
+                fcf_annual.append({
+                    "year": year,
+                    "value": fcf_value,
+                    "cfo": cfo_year["value"],
+                    "capex": capex_year["value"]
+                })
+        
+        # Build API response
+        response = {
+            "status": "success",
+            "data": {
+                "stock_name": metadata.get("name"),
+                "stock_ticker": _normalize_ticker(ticker),
+                "stock_price": price,
+                "currency": currency,
+                "market_cap": market_cap,
+                "shares_outstanding": shares_outstanding,
+                "exchange": exchange,
+                "eps_quarterly": eps_quarterly,
+                "free_cash_flow_annual": fcf_annual,
+                "capex_annual": capex_annual,
+                "stock_based_compensation_annual": sbc_annual,
+            },
+            "metadata": {
+                "cik": cik,
+                "retrieved_at": datetime.utcnow().isoformat() + "Z",
+                "data_sources": {
+                    "fundamentals": "SEC EDGAR XBRL",
+                    "market_data": "Yahoo Finance (when available)" if market_data else "SEC EDGAR only"
+                },
+                "notes": "Market data may be limited. Price and market cap from SEC when Yahoo unavailable."
+            }
+        }
+        
+        return response
+        
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": {
+                "message": str(e),
+                "type": type(e).__name__
+            },
+            "data": None
+        }
+
+# ----------------------------
+# CLI Usage
 # ----------------------------
 
 if __name__ == "__main__":
-    import argparse, json
-    parser = argparse.ArgumentParser(description="Fetch FCF and SBC from SEC EDGAR (XBRL).")
-    parser.add_argument("ticker", help="Stock ticker, e.g., AAPL")
+    import argparse
+    import json
+    
+    parser = argparse.ArgumentParser(
+        description="Fetch comprehensive financial data from SEC EDGAR and Yahoo Finance"
+    )
+    parser.add_argument("ticker", help="Stock ticker (e.g., AAPL, MSFT)")
+    parser.add_argument("--pretty", action="store_true", help="Pretty print JSON output")
+    
     args = parser.parse_args()
-
-    try:
-        result = get_fcf_sbc_metrics(args.ticker)
+    
+    result = get_financial_data(args.ticker)
+    
+    if args.pretty:
         print(json.dumps(result, indent=2))
-    except Exception as e:
-        print(f"Error: {e}")
-        raise
+    else:
+        print(json.dumps(result))
