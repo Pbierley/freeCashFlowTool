@@ -1,11 +1,18 @@
 import unittest
 import requests
 import requests_mock
+import os
+from dotenv import load_dotenv
 from unittest.mock import patch, MagicMock
-from financial_data_processor import FinancialDataProcessor
+from financial_data_processor import APIClient
 
 # Instantiate the processor class once
-processor = FinancialDataProcessor("FAKE_FMP_KEY", "FAKE_POLYGON_KEY")
+
+load_dotenv()
+FMP_API_KEY = os.getenv("FMP_API_KEY")
+POLYGON_API_KEY = os.getenv("POLYGON_API_KEY")
+
+processor = APIClient(FMP_API_KEY, POLYGON_API_KEY)
 
 # Define mock data structures
 MOCK_STOCK_INFO = [{"symbol": "TSLA", "price": 900.00, "mktCap": 900000000000}]
