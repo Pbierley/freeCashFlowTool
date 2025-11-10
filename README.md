@@ -68,3 +68,8 @@ Operating Margin
 Net Margin
 
 ---
+
+## Running locally 
+
+Run pip install -r requirments.txt
+Run streamlit run app.py

@@ -89,8 +89,17 @@ class MetricsDisplay:
         with col1:
             st.metric("Current Price", f"${quote.get('price', 0):.2f}")
         with col2:
-            st.metric("Day Change %", f"{quote.get('changesPercentage', 0):.2f}%", 
-                     delta=f"{quote.get('change', 0):.2f}")
+            # allow this to either take 'changePercentage' or fall back to taking changes and calculating
+            if 'changesPercentage' in quote:
+                st.metric("Day Change %", f"{quote.get('changesPercentage', 0):.2f}%", 
+                         delta=f"{quote.get('change', 0):.2f}")
+            else:
+                 difference = quote.get('change', 0)
+                 previous_close = quote.get('previousClose', 1)  # avoid division by zero
+                 change_percentage = (difference / previous_close) * 100
+                 st.metric("Day Change %", f"{change_percentage:.2f}%", 
+                          delta=f"{difference:.2f}")
+            
         with col3:
             st.metric("Day High", f"${quote.get('dayHigh', 0):.2f}")
         with col4:
