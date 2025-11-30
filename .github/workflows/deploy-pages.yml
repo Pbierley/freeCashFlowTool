@@ -6,7 +6,9 @@ on:
       - master
 
 permissions:
-  contents: read # Changed to read, only needed for checkout
+  # The contents:read permission is required for actions/checkout
+  contents: read 
+  # The pages:write and id-token:write permissions are required for the official GitHub Pages deployment actions
   pages: write
   id-token: write
 
@@ -27,7 +29,6 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          # Also install Hugo build dependencies if needed, e.g., using a lock file
 
       - name: Run tests
         run: |
@@ -40,9 +41,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        # Ensure 'submodules: true' is added if your Hugo theme is a submodule
+        # Add 'submodules: true' if your Hugo theme is installed as a git submodule
         # with:
-        #   submodules: true 
+        #   submodules: true
 
       - name: Setup Hugo
         uses: peaceiris/actions-hugo@v2
@@ -50,19 +51,15 @@ jobs:
           hugo-version: '0.115.0'
 
       - name: Build Hugo site
-        # Assuming 'hugo-site' is the source dir and 'docs' is the final output dir
+        # This command runs Hugo, using 'hugo-site' as the source and outputs to the 'docs' directory
         run: |
           hugo -s hugo-site -d docs -v --minify
 
-      - name: Prepare pages artifact
-        # The Hugo output is in 'docs', but GitHub Pages deployer needs the files 
-        # to be uploaded as the root artifact.
-        # Use the 'docs' folder directly as the path for the artifact upload.
-
-      - name: Upload artifact
+      - name: Upload pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: docs # Uploads the contents of the 'docs' directory
+          # The path points to the directory containing the static files (Hugo output)
+          path: docs 
 
   deploy:
     needs: build-hugo-and-prepare-artifact
