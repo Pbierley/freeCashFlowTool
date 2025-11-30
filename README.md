@@ -134,6 +134,20 @@ rm -rf my_project_env venv .venv __pycache__ .pytest_cache || true
 
 This removes the files from Git history and deletes local directories while leaving `.gitignore` in place so they are not re-added.
 
+## GitHub Pages
+
+We included a simple website that advertises this project. To publish:
+
+1. Push the `master` branch to GitHub.
+2. The included GitHub Actions workflow (`.github/workflows/deploy-pages.yml`) runs on pushes to `master` and deploys the `docs/` directory to GitHub Pages automatically.
+3. Go to the repo Settings > Pages and verify the site is published; the default URL will be:
+
+```
+https://<your-username>.github.io/freeCashFlowTool
+```
+
+If you prefer a different folder or publishing strategy, update the workflow or GitHub Pages settings accordingly.
+
 Note: You'll need valid environment variables for the FMP and POLYGON API keys when running the app:
 - FMP_API_KEY
 - POLYGON_API_KEY
