@@ -148,6 +148,18 @@ https://<your-username>.github.io/freeCashFlowTool
 
 If you prefer a different folder or publishing strategy, update the workflow or GitHub Pages settings accordingly.
 
+## Hugo landing site
+
+We maintain the Hugo site source in `hugo-site/`. The GitHub Actions workflow will build this site and deploy the generated static files to `gh-pages` branch.
+
+Build the landing page locally with Hugo (if you have hugo installed):
+
+```bash
+hugo -s hugo-site -d docs
+```
+
+This will generate the static site to `docs/` and the CI workflow will deploy the published content to GitHub Pages.
+
 Note: You'll need valid environment variables for the FMP and POLYGON API keys when running the app:
 - FMP_API_KEY
 - POLYGON_API_KEY
