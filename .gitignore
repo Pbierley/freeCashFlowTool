@@ -7,3 +7,13 @@ env
 .DS_Store
 /__pycache__/
 __pycache__/
+my_project_env/
+/.ipynb_checkpoints
+*.pyc
+*.pyo
+*.pyd
+build/
+dist/
+*.egg-info/
+/.mypy_cache
+/.pytest_cache

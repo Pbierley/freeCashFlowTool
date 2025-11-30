@@ -71,5 +71,69 @@ Net Margin
 
 ## Running locally 
 
-Run pip install -r requirments.txt
-Run streamlit run app.py
+### Running locally
+
+1. Create and activate a virtual environment (recommended):
+
+```bash
+python3 -m venv my_project_env
+source my_project_env/bin/activate
+```
+
+2. Install runtime and development dependencies:
+
+```bash
+pip install -r requirements.txt
+pip install -r requirements-dev.txt
+```
+
+3. Run the streamlit app locally:
+
+```bash
+streamlit run app.py
+```
+
+4. Run tests:
+
+```bash
+pytest -q
+```
+
+### Running using Docker (recommended for exact reproducibility)
+
+1. Build the Docker image (first time):
+
+```bash
+docker build -t freecashflow-tool .
+```
+
+2. Run the test suite inside Docker:
+
+```bash
+docker run --rm -v "$(pwd):/app" freecashflow-tool
+```
+
+Or use docker-compose:
+
+```bash
+docker-compose up --build --abort-on-container-exit
+```
+
+This approach ensures a consistent environment across machines and avoids committing local virtualenvs or other hidden files.
+
+Note: You'll need valid environment variables for the FMP and POLYGON API keys when running the app:
+- FMP_API_KEY
+- POLYGON_API_KEY
+
+Add these to a `.env` file at the repo root or export them into your shell.
+
+### Using a secure .env (do not commit)
+
+We provide `.env.example` with placeholders for your convenience. DO NOT commit a `.env` containing secrets. Copy it and provide your own keys:
+
+```bash
+cp .env.example .env
+# then fill in your keys
+```
+
+This repo ignores `.env` and locally created virtual environments so they are not shared with colleagues.

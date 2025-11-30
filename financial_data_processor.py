@@ -237,3 +237,24 @@ class FinancialDataService:
             'market_cap': market_cap,
             'price': price
         }
+
+
+class FinancialDataProcessor:
+    """Compatibility wrapper/alias class so older code/tests that expect
+    FinancialDataProcessor can still use this module.
+    """
+
+    def __init__(self, fmp_key: str, polygon_key: str):
+        self.api_client = APIClient(fmp_key, polygon_key)
+        self.transformer = DataTransformer()
+        self.calculator = MetricsCalculator()
+
+    @staticmethod
+    def calculate_cagr(start_value: float, end_value: float, years: int):
+        return MetricsCalculator.calculate_cagr(start_value, end_value, years)
+
+    def _prepare_financial_df(self, data: List[Dict]):
+        return self.transformer.to_financial_dataframe(data)
+
+    def calculate_cagrs(self, df: pd.DataFrame, metric_col: str, periods: List[int] = [1, 3, 5]):
+        return self.calculator.calculate_metric_cagrs(df, metric_col, periods)

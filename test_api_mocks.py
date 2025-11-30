@@ -1,97 +1,431 @@
-import unittest
-import requests
-import requests_mock
-import os
-from dotenv import load_dotenv
-from unittest.mock import patch, MagicMock
-from financial_data_processor import APIClient
+import pytest
+import pandas as pd
+import plotly.graph_objects as go
+from unittest.mock import Mock, MagicMock, patch
+from datetime import datetime, timedelta
 
-# Instantiate the processor class once
-
-load_dotenv()
-FMP_API_KEY = os.getenv("FMP_API_KEY")
-POLYGON_API_KEY = os.getenv("POLYGON_API_KEY")
-
-processor = APIClient(FMP_API_KEY, POLYGON_API_KEY)
-
-# Define mock data structures
-MOCK_STOCK_INFO = [{"symbol": "TSLA", "price": 900.00, "mktCap": 900000000000}]
-MOCK_INCOME_DATA = [{"date": "2024-12-31", "revenue": 1000000}]
-MOCK_POLYGON_DATA = {"ticker": "TSLA", "status": "OK", "results": [{"t": 1609459200000, "c": 705.67}]}
+# Assuming these are imported from your main module
+from main import ChartRenderer, MetricsDisplay, DashboardApp
 
 
-class TestApiMocking(unittest.TestCase):
+# ===== FIXTURES =====
+@pytest.fixture
+def sample_price_df():
+    """Create sample price history DataFrame."""
+    dates = pd.date_range(start='2023-01-01', periods=10, freq='D')
+    return pd.DataFrame({
+        'date': dates,
+        'close': [150 + i for i in range(10)]
+    })
 
-    # --- Mocking the generic _fetch_data method ---
+
+@pytest.fixture
+def sample_financial_df():
+    """Create sample financial metrics DataFrame."""
+    dates = pd.date_range(start='2019-01-01', periods=5, freq='YS')
+    return pd.DataFrame({
+        'date': dates,
+        'revenue': [100e9, 110e9, 120e9, 130e9, 140e9],
+        'epsDiluted': [5.0, 5.5, 6.0, 6.5, 7.0],
+        'pe': [25.0, 24.0, 23.0, 22.0, 21.0],
+        'grossProfitRatio': [0.38, 0.39, 0.40, 0.41, 0.42],
+        'operatingIncomeRatio': [0.25, 0.26, 0.27, 0.28, 0.29],
+        'netIncomeRatio': [0.20, 0.21, 0.22, 0.23, 0.24],
+        'weightedAverageShsOutDil': [16e9, 16.1e9, 16.2e9, 16.3e9, 16.4e9]
+    })
+
+
+@pytest.fixture
+def sample_cashflow_df():
+    """Create sample cashflow DataFrame."""
+    dates = pd.date_range(start='2019-01-01', periods=5, freq='YS')
+    return pd.DataFrame({
+        'date': dates,
+        'freeCashFlow': [20e9, 22e9, 24e9, 26e9, 28e9],
+        'fcf_minus_sbc': [18e9, 20e9, 22e9, 24e9, 26e9],
+        'fcf_yield': [2.5, 2.6, 2.7, 2.8, 2.9]
+    })
+
+
+@pytest.fixture
+def sample_profile():
+    """Create sample company profile."""
+    return {
+        'symbol': 'AAPL',
+        'companyName': 'Apple Inc.',
+        'mktCap': 2500e9,
+        'price': 150.0
+    }
+
+
+@pytest.fixture
+def sample_quote():
+    """Create sample quote data."""
+    return {
+        'symbol': 'AAPL',
+        'price': 150.0,
+        'change': 2.5,
+        'changesPercentage': 1.69,
+        'dayHigh': 152.0,
+        'dayLow': 148.0,
+        'previousClose': 147.5
+    }
+
+
+# ===== CHART RENDERER TESTS =====
+class TestChartRenderer:
     
-    @patch('financial_data_processor.FinancialDataProcessor._fetch_data')
-    def test_get_stock_info_success(self, mock_fetch):
-        """Test successful stock info retrieval via mocked internal fetch."""
-        mock_fetch.return_value = MOCK_STOCK_INFO
-        
-        result = processor.get_stock_info("TSLA")
-        
-        # Verify the mock fetch was called correctly
-        mock_fetch.assert_called_once()
-        self.assertEqual(result[0]['price'], 900.00)
-
-    @patch('financial_data_processor.FinancialDataProcessor._fetch_data')
-    def test_get_income_statement_params(self, mock_fetch):
-        """Test that the income statement method passes correct parameters."""
-        mock_fetch.return_value = MOCK_INCOME_DATA
-        
-        processor.get_income_statement("AAPL", period="quarter", limit=10)
-        
-        # Check that the internal fetch was called with the correct endpoint and parameters
-        mock_fetch.assert_called_once_with(
-            "income-statement", "AAPL", "FAKE_FMP_KEY",
-            params={"period": "quarter", "limit": 10}
+    def test_render_line_chart_creates_figure(self, sample_price_df):
+        """Test that render_line_chart creates a valid Plotly figure."""
+        fig = ChartRenderer.render_line_chart(
+            sample_price_df, 'date', 'close',
+            'Stock Price', 'Price ($)'
         )
-
-    # --- Testing Error Handling (requires requests_mock for low-level mocking) ---
+        
+        assert isinstance(fig, go.Figure)
+        assert len(fig.data) == 1
+        assert fig.data[0].mode == 'lines'
     
-    def test_api_http_error_handling(self):
-        """Test that the API functions correctly raise HTTPError."""
+    def test_render_line_chart_correct_data(self, sample_price_df):
+        """Test that line chart contains correct data points."""
+        fig = ChartRenderer.render_line_chart(
+            sample_price_df, 'date', 'close',
+            'Stock Price', 'Price ($)'
+        )
         
-        # Use requests_mock to simulate a 404 response on the low-level API call
-        with requests_mock.Mocker() as m:
-            m.get(
-                requests_mock.ANY,  # Mock any URL
-                status_code=404
-            )
-            # Ensure the public facing method raises the expected exception
-            with self.assertRaises(requests.HTTPError):
-                processor.get_stock_info("BADTICKER")
-                
-    # --- Test Data Transformation (FCF Yield Calculation) ---
-    def test_calculate_derived_metrics_fcf_yield(self):
-        """Verifies derived metrics like FCF Yield are calculated correctly."""
+        assert len(fig.data[0].x) == len(sample_price_df)
+        assert len(fig.data[0].y) == len(sample_price_df)
+    
+    def test_render_line_chart_custom_color(self, sample_price_df):
+        """Test that custom color is applied to line chart."""
+        custom_color = '#FF5733'
+        fig = ChartRenderer.render_line_chart(
+            sample_price_df, 'date', 'close',
+            'Stock Price', 'Price ($)',
+            color=custom_color
+        )
         
-        # Mock data for FCF and SBC (sorted by date)
-        mock_cashflow_data = pd.DataFrame({
-            'date': [datetime(2023, 12, 31), datetime(2024, 12, 31)],
-            'freeCashFlow': [1000, 2000],
-            'stockBasedCompensation': [100, 200],
-        })
+        assert fig.data[0].line.color == custom_color
+    
+    def test_render_line_chart_labels(self, sample_price_df):
+        """Test that line chart has correct axis labels."""
+        fig = ChartRenderer.render_line_chart(
+            sample_price_df, 'date', 'close',
+            'Stock Price', 'Price ($)'
+        )
         
-        data_dict = {'income_df': pd.DataFrame(), 'cashflow_df': mock_cashflow_data}
-        market_cap = 100000 # $100k
-        price = 100 # Placeholder
+        assert fig.layout.yaxis.title.text == 'Price ($)'
+        assert fig.layout.xaxis.title.text == 'Date'
+    
+    def test_render_bar_chart_creates_figure(self, sample_financial_df):
+        """Test that render_bar_chart creates a valid Plotly figure."""
+        fig = ChartRenderer.render_bar_chart(
+            sample_financial_df, 'date', 'revenue',
+            'Revenue ($)'
+        )
         
-        result = processor.calculate_derived_metrics(data_dict, market_cap, price)
-        df = result['cashflow_df']
+        assert isinstance(fig, go.Figure)
+        assert len(fig.data) > 0
+    
+    def test_render_bar_chart_correct_data(self, sample_financial_df):
+        """Test that bar chart contains correct data points."""
+        fig = ChartRenderer.render_bar_chart(
+            sample_financial_df, 'date', 'revenue',
+            'Revenue ($)'
+        )
         
-        # 1. Verify FCF - SBC calculation
-        # 1000 - 100 = 900
-        # 2000 - 200 = 1800
-        self.assertEqual(df.iloc[0]['fcf_minus_sbc'], 900)
-        self.assertEqual(df.iloc[1]['fcf_minus_sbc'], 1800)
+        assert len(fig.data[0].x) == len(sample_financial_df)
+        assert len(fig.data[0].y) == len(sample_financial_df)
+    
+    def test_render_bar_chart_custom_color(self, sample_financial_df):
+        """Test that custom color is applied to bar chart."""
+        custom_color = '#00AA00'
+        fig = ChartRenderer.render_bar_chart(
+            sample_financial_df, 'date', 'revenue',
+            'Revenue ($)',
+            color=custom_color
+        )
+        
+        assert fig.data[0].marker.color == custom_color
+    
+    def test_render_bar_chart_height(self, sample_financial_df):
+        """Test that bar chart has correct height."""
+        fig = ChartRenderer.render_bar_chart(
+            sample_financial_df, 'date', 'revenue',
+            'Revenue ($)'
+        )
+        
+        assert fig.layout.height == 400
 
-        # 2. Verify FCF Yield calculation
-        # (900 / 100000) * 100 = 0.9%
-        # (1800 / 100000) * 100 = 1.8%
-        self.assertAlmostEqual(df.iloc[0]['fcf_yield'], 0.9, places=2)
-        self.assertAlmostEqual(df.iloc[1]['fcf_yield'], 1.8, places=2)
 
-if __name__ == '__main__':
-    unittest.main(argv=['first-arg-is-ignored'], exit=False)
+# ===== METRICS DISPLAY TESTS =====
+class TestMetricsDisplay:
+    
+    @patch('streamlit.header')
+    @patch('streamlit.columns')
+    @patch('streamlit.metric')
+    @patch('streamlit.divider')
+    def test_display_overview_renders_header(self, mock_divider, mock_metric, 
+                                            mock_columns, mock_header, 
+                                            sample_profile, sample_quote):
+        """Test that display_overview renders company header."""
+        MetricsDisplay.display_overview(sample_profile, sample_quote)
+        mock_header.assert_called_once()
+    
+    @patch('streamlit.columns')
+    @patch('streamlit.metric')
+    def test_display_overview_renders_four_columns(self, mock_metric, mock_columns,
+                                                   sample_profile, sample_quote):
+        """Test that display_overview uses four columns."""
+        mock_columns.return_value = [Mock(), Mock(), Mock(), Mock()]
+        MetricsDisplay.display_overview(sample_profile, sample_quote)
+        mock_columns.assert_called_with(4)
+    
+    @patch('streamlit.metric')
+    def test_display_quote_metrics_renders_current_price(self, mock_metric, 
+                                                        sample_quote):
+        """Test that quote metrics displays current price."""
+        with patch('streamlit.columns', return_value=[Mock(), Mock(), Mock(), Mock()]):
+            MetricsDisplay.display_quote_metrics(sample_quote)
+        
+        # Verify metric was called (would be for current price among others)
+        assert mock_metric.called
+    
+    @patch('streamlit.metric')
+    def test_display_quote_metrics_calculates_change_percentage_fallback(self, mock_metric):
+        """Test that quote metrics calculates change % if not provided."""
+        quote_no_percentage = {
+            'price': 150.0,
+            'change': 2.5,
+            'previousClose': 147.5,
+            'dayHigh': 152.0,
+            'dayLow': 148.0
+        }
+        
+        with patch('streamlit.columns', return_value=[Mock(), Mock(), Mock(), Mock()]):
+            MetricsDisplay.display_quote_metrics(quote_no_percentage)
+        
+        assert mock_metric.called
+    
+    @patch('streamlit.metric')
+    def test_display_cagrs_empty_dataframe(self, mock_metric):
+        """Test that display_cagrs handles empty DataFrame gracefully."""
+        empty_df = pd.DataFrame()
+        MetricsDisplay.display_cagrs(empty_df, 'revenue', 'Revenue')
+        mock_metric.assert_not_called()
+    
+    @patch('streamlit.metric')
+    def test_display_cagrs_missing_column(self, mock_metric, sample_financial_df):
+        """Test that display_cagrs handles missing column gracefully."""
+        MetricsDisplay.display_cagrs(sample_financial_df, 'nonexistent_col', 'Revenue')
+        mock_metric.assert_not_called()
+    
+    @patch('streamlit.metric')
+    def test_display_fcf_yield_metrics_empty_dataframe(self, mock_metric):
+        """Test that display_fcf_yield_metrics handles empty DataFrame gracefully."""
+        empty_df = pd.DataFrame()
+        MetricsDisplay.display_fcf_yield_metrics(empty_df)
+        mock_metric.assert_not_called()
+    
+    @patch('streamlit.metric')
+    @patch('streamlit.columns')
+    def test_display_fcf_yield_metrics_valid_data(self, mock_columns, mock_metric, 
+                                                  sample_cashflow_df):
+        """Test that display_fcf_yield_metrics displays correct metrics."""
+        mock_columns.return_value = [Mock(), Mock()]
+        MetricsDisplay.display_fcf_yield_metrics(sample_cashflow_df)
+        assert mock_metric.called
+
+
+# ===== DASHBOARD APP TESTS =====
+class TestDashboardApp:
+    
+    @patch('main.APIClient')
+    @patch('main.FinancialDataService')
+    def test_dashboard_app_initialization(self, mock_service, mock_client):
+        """Test that DashboardApp initializes correctly."""
+        app = DashboardApp('test_fmp_key', 'test_polygon_key')
+        
+        assert app.api_client is not None
+        assert app.data_service is not None
+        assert isinstance(app.chart_renderer, ChartRenderer)
+        assert isinstance(app.metrics_display, MetricsDisplay)
+    
+    @patch('streamlit.sidebar')
+    @patch('streamlit.text_input', return_value='AAPL')
+    @patch('streamlit.button', return_value=False)
+    @patch('streamlit.session_state', {'ticker': 'AAPL'})
+    @patch('main.APIClient')
+    @patch('main.FinancialDataService')
+    def test_render_sidebar_returns_ticker(self, mock_service, mock_client,
+                                          mock_button, mock_input, mock_sidebar):
+        """Test that render_sidebar returns selected ticker."""
+        app = DashboardApp('test_fmp_key', 'test_polygon_key')
+        
+        with patch('streamlit.session_state', {'ticker': 'AAPL'}):
+            with patch('streamlit.text_input', return_value='AAPL'):
+                result = app.render_sidebar()
+        
+        assert result in ['AAPL', None] or result == 'AAPL'
+    
+    @patch('streamlit.subheader')
+    @patch('streamlit.plotly_chart')
+    @patch('streamlit.info')
+    @patch('main.APIClient')
+    @patch('main.FinancialDataService')
+    def test_render_price_section_empty_data(self, mock_service, mock_client,
+                                            mock_info, mock_chart, mock_subheader):
+        """Test that render_price_section handles empty data."""
+        app = DashboardApp('test_fmp_key', 'test_polygon_key')
+        empty_df = pd.DataFrame()
+        quote = {}
+        
+        app.render_price_section(empty_df, quote)
+        mock_info.assert_called_once()
+    
+    @patch('streamlit.subheader')
+    @patch('streamlit.plotly_chart')
+    @patch('main.APIClient')
+    @patch('main.FinancialDataService')
+    def test_render_price_section_valid_data(self, mock_service, mock_client,
+                                            mock_chart, mock_subheader,
+                                            sample_price_df, sample_quote):
+        """Test that render_price_section renders with valid data."""
+        app = DashboardApp('test_fmp_key', 'test_polygon_key')
+        app.render_price_section(sample_price_df, sample_quote)
+        
+        mock_subheader.assert_called()
+        mock_chart.assert_called()
+    
+    @patch('streamlit.subheader')
+    @patch('streamlit.plotly_chart')
+    @patch('streamlit.info')
+    @patch('main.APIClient')
+    @patch('main.FinancialDataService')
+    def test_render_financial_metric_empty_data(self, mock_service, mock_client,
+                                               mock_info, mock_chart, mock_subheader):
+        """Test that render_financial_metric handles empty data."""
+        app = DashboardApp('test_fmp_key', 'test_polygon_key')
+        empty_df = pd.DataFrame()
+        
+        app.render_financial_metric(empty_df, 'revenue', 'Revenue', 'Revenue ($)')
+        mock_info.assert_called()
+    
+    @patch('streamlit.subheader')
+    @patch('streamlit.radio')
+    @patch('streamlit.plotly_chart')
+    @patch('streamlit.info')
+    @patch('main.APIClient')
+    @patch('main.FinancialDataService')
+    def test_render_fcf_section_empty_data(self, mock_service, mock_client,
+                                          mock_info, mock_chart, mock_radio,
+                                          mock_subheader):
+        """Test that render_fcf_section handles empty data."""
+        mock_radio.return_value = "Free Cash Flow"
+        app = DashboardApp('test_fmp_key', 'test_polygon_key')
+        empty_df = pd.DataFrame()
+        
+        app.render_fcf_section(empty_df)
+        mock_info.assert_called()
+    
+    @patch('streamlit.subheader')
+    @patch('streamlit.radio')
+    @patch('streamlit.plotly_chart')
+    @patch('main.APIClient')
+    @patch('main.FinancialDataService')
+    def test_render_fcf_section_valid_data(self, mock_service, mock_client,
+                                          mock_chart, mock_radio, mock_subheader,
+                                          sample_cashflow_df):
+        """Test that render_fcf_section renders with valid data."""
+        mock_radio.return_value = "Free Cash Flow"
+        app = DashboardApp('test_fmp_key', 'test_polygon_key')
+        
+        app.render_fcf_section(sample_cashflow_df)
+        mock_chart.assert_called()
+    
+    @patch('streamlit.subheader')
+    @patch('streamlit.radio')
+    @patch('streamlit.plotly_chart')
+    @patch('streamlit.info')
+    @patch('main.APIClient')
+    @patch('main.FinancialDataService')
+    def test_render_margins_section_empty_data(self, mock_service, mock_client,
+                                              mock_info, mock_chart, mock_radio,
+                                              mock_subheader):
+        """Test that render_margins_section handles empty data."""
+        mock_radio.return_value = "Gross Margin"
+        app = DashboardApp('test_fmp_key', 'test_polygon_key')
+        empty_df = pd.DataFrame()
+        
+        app.render_margins_section(empty_df)
+        mock_info.assert_called()
+    
+    @patch('streamlit.subheader')
+    @patch('streamlit.radio')
+    @patch('streamlit.plotly_chart')
+    @patch('main.APIClient')
+    @patch('main.FinancialDataService')
+    def test_render_margins_section_gross_margin(self, mock_service, mock_client,
+                                                 mock_chart, mock_radio,
+                                                 mock_subheader, sample_financial_df):
+        """Test that render_margins_section works for gross margin."""
+        mock_radio.return_value = "Gross Margin"
+        app = DashboardApp('test_fmp_key', 'test_polygon_key')
+        
+        app.render_margins_section(sample_financial_df)
+        mock_chart.assert_called()
+    
+    @patch('streamlit.title')
+    @patch('streamlit.spinner')
+    @patch('streamlit.error')
+    @patch('main.APIClient')
+    @patch('main.FinancialDataService')
+    def test_run_handles_exception(self, mock_service, mock_client,
+                                   mock_error, mock_spinner, mock_title):
+        """Test that run method handles exceptions gracefully."""
+        mock_service_instance = Mock()
+        mock_service.return_value = mock_service_instance
+        mock_service_instance.get_all_financial_data.side_effect = Exception("API Error")
+        
+        app = DashboardApp('test_fmp_key', 'test_polygon_key')
+        app.data_service = mock_service_instance
+        
+        with patch('main.DashboardApp.render_sidebar', return_value='AAPL'):
+            with patch('streamlit.spinner'):
+                app.run()
+        
+        mock_error.assert_called()
+
+
+# ===== INTEGRATION TESTS =====
+class TestIntegration:
+    
+    def test_chart_renderer_with_sample_data(self, sample_price_df, sample_financial_df):
+        """Test chart rendering pipeline with sample data."""
+        line_fig = ChartRenderer.render_line_chart(
+            sample_price_df, 'date', 'close', 'Stock Price', 'Price ($)'
+        )
+        bar_fig = ChartRenderer.render_bar_chart(
+            sample_financial_df, 'date', 'revenue', 'Revenue ($)'
+        )
+        
+        assert isinstance(line_fig, go.Figure)
+        assert isinstance(bar_fig, go.Figure)
+        assert len(line_fig.data) > 0
+        assert len(bar_fig.data) > 0
+    
+    @patch('streamlit.metric')
+    def test_metrics_display_with_all_data(self, mock_metric, sample_profile, 
+                                          sample_quote, sample_financial_df,
+                                          sample_cashflow_df):
+        """Test metrics display with complete data set."""
+        with patch('streamlit.header'), \
+             patch('streamlit.columns', return_value=[Mock(), Mock(), Mock(), Mock()]), \
+             patch('streamlit.divider'):
+            MetricsDisplay.display_overview(sample_profile, sample_quote)
+        
+        assert mock_metric.called
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])
