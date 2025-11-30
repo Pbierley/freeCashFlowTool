@@ -121,6 +121,19 @@ docker-compose up --build --abort-on-container-exit
 
 This approach ensures a consistent environment across machines and avoids committing local virtualenvs or other hidden files.
 
+### Cleaning up previously committed virtualenvs and caches
+
+If you committed a virtualenv or local caches by mistake, clean up your git history:
+
+```bash
+# Untrack virtualenvs and caches from the repo
+git rm -r --cached my_project_env venv .venv __pycache__ .pytest_cache || true
+git commit -m "Remove committed virtualenv and cache directories"
+rm -rf my_project_env venv .venv __pycache__ .pytest_cache || true
+```
+
+This removes the files from Git history and deletes local directories while leaving `.gitignore` in place so they are not re-added.
+
 Note: You'll need valid environment variables for the FMP and POLYGON API keys when running the app:
 - FMP_API_KEY
 - POLYGON_API_KEY
