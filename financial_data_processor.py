@@ -108,8 +108,11 @@ class MetricsCalculator:
     def add_pe_ratio(income_df: pd.DataFrame, current_price: float) -> pd.DataFrame:
         """Add P/E ratio column to income statement."""
         if 'epsDiluted' in income_df.columns and current_price > 0:
+            # FIXED: Use direct assignment instead of chained assignment
+            income_df = income_df.copy()  # Ensure we have a copy
             income_df['pe'] = current_price / income_df['epsDiluted']
-            income_df['pe'].replace([float('inf'), -float('inf')], float('nan'), inplace=True)
+            # Replace inf values with NaN
+            income_df['pe'] = income_df['pe'].replace([float('inf'), -float('inf')], float('nan'))
         return income_df
 
     @staticmethod
@@ -118,6 +121,7 @@ class MetricsCalculator:
         if 'revenue' not in income_df.columns or income_df.empty:
             return income_df
         
+        income_df = income_df.copy()  # Ensure we have a copy
         margin_metrics = [
             ('grossProfit', 'grossProfitRatio'),
             ('operatingIncome', 'operatingIncomeRatio'),
@@ -135,6 +139,8 @@ class MetricsCalculator:
         """Add FCF - SBC and FCF Yield columns."""
         if cashflow_df.empty:
             return cashflow_df
+        
+        cashflow_df = cashflow_df.copy()  # Ensure we have a copy
         
         # FCF - SBC
         if 'freeCashFlow' in cashflow_df.columns and 'stockBasedCompensation' in cashflow_df.columns:
