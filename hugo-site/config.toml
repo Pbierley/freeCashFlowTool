@@ -1,0 +1,6 @@
+baseURL = "https://Pbierley.github.io/freeCashFlowTool/"
+languageCode = "en-us"
+title = "freeCashFlowTool"
+
+[params]
+  tagline = "A lightweight Stock Analysis Dashboard"
