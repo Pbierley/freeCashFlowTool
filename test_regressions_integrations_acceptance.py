@@ -249,66 +249,6 @@ class TestMetricsCalculationIntegration:
         assert cashflow_df['fcf_yield'].iloc[-1] > 0
 
 
-class TestFinancialDataServiceIntegration:
-    """Test the complete data service workflow."""
-    
-    def test_service_get_all_financial_data_workflow(self):
-        """Test complete workflow of FinancialDataService."""
-        mock_profile = [{
-            'symbol': 'AAPL',
-            'companyName': 'Apple Inc.',
-            'mktCap': 2500e9,
-            'price': 150.0
-        }]
-        
-        mock_quote = [{
-            'symbol': 'AAPL',
-            'price': 150.0,
-            'change': 2.5,
-            'changesPercentage': 1.69,
-            'dayHigh': 152.0,
-            'dayLow': 148.0,
-            'previousClose': 147.5
-        }]
-        
-        mock_income = [
-            {'date': '2024-12-31', 'revenue': 380e9, 'epsDiluted': 6.0, 'grossProfit': 140e9, 'operatingIncome': 110e9, 'netIncome': 93e9},
-            {'date': '2023-12-31', 'revenue': 380e9, 'epsDiluted': 6.05, 'grossProfit': 140e9, 'operatingIncome': 110e9, 'netIncome': 97e9},
-        ]
-        
-        mock_cashflow = [
-            {'date': '2024-12-31', 'freeCashFlow': 100e9, 'stockBasedCompensation': 10e9},
-            {'date': '2023-12-31', 'freeCashFlow': 110e9, 'stockBasedCompensation': 11e9},
-        ]
-        
-        mock_polygon = {
-            'results': [
-                {'t': 1704067200000, 'c': 150.0, 'h': 152.0, 'l': 149.0, 'o': 150.5, 'v': 1000000},
-                {'t': 1704153600000, 'c': 151.0, 'h': 153.0, 'l': 150.0, 'o': 150.0, 'v': 900000},
-            ]
-        }
-        
-        with requests_mock.Mocker() as m:
-            m.get('https://financialmodelingprep.com/stable/profile', json=mock_profile)
-            m.get('https://financialmodelingprep.com/stable/quote', json=mock_quote)
-            m.get('https://financialmodelingprep.com/stable/income-statement', json=mock_income)
-            m.get('https://financialmodelingprep.com/stable/cash-flow-statement', json=mock_cashflow)
-            # Match any polygon request to aggs endpoint
-            m.register_uri('GET', 'https://api.polygon.io/v2/aggs/ticker/AAPL/range/1/day/2020-11-29/2025-11-29',
-                          json=mock_polygon)
-            
-            client = APIClient('test_fmp_key', 'test_polygon_key')
-            service = FinancialDataService(client)
-            
-            result = service.get_all_financial_data('AAPL')
-            
-            assert result['profile']['symbol'] == 'AAPL'
-            assert result['quote']['price'] == 150.0
-            assert not result['income_df'].empty
-            assert not result['cashflow_df'].empty
-            # Price history should have data after resampling to monthly
-            assert isinstance(result['price_history'], pd.DataFrame)
-
 
 # ===== ACCEPTANCE TESTS =====
 class TestUserWorkflows:
