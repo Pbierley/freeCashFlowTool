@@ -143,7 +143,7 @@ We included a simple website that advertises this project. To publish:
 3. Go to the repo Settings > Pages and verify the site is published; the default URL will be:
 
 ```
-https://<your-username>.github.io/freeCashFlowTool
+https://Pbierley.github.io/freeCashFlowTool
 ```
 
 If you prefer a different folder or publishing strategy, update the workflow or GitHub Pages settings accordingly.
