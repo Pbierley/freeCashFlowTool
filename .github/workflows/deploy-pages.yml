@@ -1,4 +1,4 @@
-name: Build and Deploy Docs (Hugo -> Pages)
+name: Build, Test, and Deploy Docs (Hugo -> Pages)
 
 on:
   push:
@@ -6,8 +6,8 @@ on:
       - master
 
 permissions:
+  contents: read # Changed to read, only needed for checkout
   pages: write
-  contents: write
   id-token: write
 
 jobs:
@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Setup Python
@@ -27,19 +27,22 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          # Also install Hugo build dependencies if needed, e.g., using a lock file
 
       - name: Run tests
         run: |
           python -m pytest -q
 
-  build-hugo-and-deploy:
+  build-hugo-and-prepare-artifact:
     needs: build-and-test
     runs-on: ubuntu-latest
-    environment: github-pages
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
+        # Ensure 'submodules: true' is added if your Hugo theme is a submodule
+        # with:
+        #   submodules: true 
 
       - name: Setup Hugo
         uses: peaceiris/actions-hugo@v2
@@ -47,65 +50,28 @@ jobs:
           hugo-version: '0.115.0'
 
       - name: Build Hugo site
+        # Assuming 'hugo-site' is the source dir and 'docs' is the final output dir
         run: |
           hugo -s hugo-site -d docs -v --minify
 
-      - name: Deploy to gh-pages
-        uses: JamesIves/github-pages-deploy-action@v4
-        with:
-          branch: gh-pages
-          folder: docs
-          clean: true
-          token: ${{ secrets.GITHUB_TOKEN }}
-name: Deploy GitHub Pages
-
-on:
-  push:
-    branches:
-      - master
-
-permissions:
-  pages: write
-  id-token: write
-
-jobs:
-  build-and-deploy:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.12'
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-
-      - name: Run tests
-        run: |
-          python -m pytest -q
-
-      - name: Prepare pages
-        run: |
-          # Pages expects the artifact content to be in a directory
-          mkdir -p out
-          cp -R docs/* out/
+      - name: Prepare pages artifact
+        # The Hugo output is in 'docs', but GitHub Pages deployer needs the files 
+        # to be uploaded as the root artifact.
+        # Use the 'docs' folder directly as the path for the artifact upload.
 
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v1
+        uses: actions/upload-pages-artifact@v3
         with:
-          path: out
+          path: docs # Uploads the contents of the 'docs' directory
 
   deploy:
-    needs: build-and-deploy
+    needs: build-hugo-and-prepare-artifact
     runs-on: ubuntu-latest
-    environment: github-pages
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
 
     steps:
       - name: Deploy to Pages
-        uses: actions/deploy-pages@v1
+        id: deployment
+        uses: actions/deploy-pages@v4
