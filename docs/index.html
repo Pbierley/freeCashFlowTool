@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>freeCashFlowTool — Stock Analysis Dashboard</title>
+    <style>
+      :root{--accent:#2b6cb0;--bg:#f9fafb;--muted:#6b7280;--card:#fff}
+      body{margin:0;font-family:Inter, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial;background:var(--bg);color:#111}
+      header{background:linear-gradient(90deg, #062b72, #1f77b4);color:#fff;padding:32px 20px}
+      .container{max-width:980px;margin:24px auto;padding:0 16px}
+      h1{margin:0;font-size:2.2rem}
+      .hero{display:flex;gap:24px;align-items:center}
+      .hero p{color:#f0f7ff;margin:8px 0 0}
+      main{margin-top:20px}
+      .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px}
+      .card{background:var(--card);border-radius:8px;padding:16px;box-shadow:0 6px 14px rgba(20,25,36,0.06)}
+      .muted{color:var(--muted)}
+      .cta{display:inline-block;margin-top:12px;padding:10px 14px;background:var(--accent);color:#fff;border-radius:6px;text-decoration:none}
+      footer{margin:40px 0 80px;color:var(--muted);text-align:center}
+      pre{background:#0f172a;color:#dbeafe;padding:16px;border-radius:6px;overflow:auto}
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="container">
+        <div class="hero">
+          <div>
+            <h1>freeCashFlowTool</h1>
+            <p class="muted">A lightweight Stock Analysis Dashboard that visualizes prices, free cash flow, FCF yield and profitability metrics.</p>
+            <p class="muted" style="font-size:0.9rem;margin-top:12px">Quickly visualize financial metrics with Plotly and Streamlit — ideal for rapid prototyping and research.</p>
+            <a class="cta" href="https://github.com/Pbierley/freeCashFlowTool">View Source on GitHub</a>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <main class="container">
+      <section class="grid">
+        <article class="card">
+          <h3>Key Features</h3>
+          <ul class="muted">
+            <li>Interactive charts (line & bar) with Plotly</li>
+            <li>Free Cash Flow & FCF Yield analysis</li>
+            <li>Profitability margin tracking (Gross / Operating / Net margin)</li>
+            <li>Easy local startup & Docker support</li>
+          </ul>
+        </article>
+
+        <article class="card">
+          <h3>Quick Start</h3>
+          <p class="muted">Run locally with a virtual environment or run within Docker for guaranteed parity across machines.</p>
+          <pre><code>python3 -m venv my_project_env
+source my_project_env/bin/activate
+pip install -r requirements.txt
+pip install -r requirements-dev.txt
+streamlit run app.py</code></pre>
+        </article>
+
+        <article class="card">
+          <h3>Docker</h3>
+          <p class="muted">Build & test in a containerized environment:</p>
+          <pre><code>docker build -t freecashflow-tool .
+docker run --rm -v "$(pwd):/app" freecashflow-tool</code></pre>
+        </article>
+
+        <article class="card">
+          <h3>For Collaborators</h3>
+          <p class="muted">We added a small <code>scripts/</code> folder to create the local venv and run tests. Use <code>./scripts/bootstrap.sh</code> to set up the environment and <code>./scripts/run_tests.sh</code> to run the test suite.</p>
+        </article>
+      </section>
+
+      <section style="margin-top:20px">
+        <h2>Installation & Tips</h2>
+        <p class="muted">Set environment variables to access external APIs. Example:</p>
+        <pre><code>cp .env.example .env
+# then edit .env to include your keys</code></pre>
+        <p class="muted">This site is generated from the <code>docs/</code> folder and can be published to GitHub Pages automatically on push via GitHub Actions.</p>
+      </section>
+    </main>
+
+    <footer>
+      <div class="container muted">© freeCashFlowTool · Made by Pbierley</div>
+    </footer>
+  </body>
+</html>
