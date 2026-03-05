@@ -14,16 +14,31 @@ class APIClient:
         self._fmp_key = fmp_api_key
         self._polygon_key = polygon_api_key
 
+    @staticmethod
+    def _format_request_error(service: str, exc: requests.RequestException) -> str:
+        """Return a user-safe error string without leaking credentials."""
+        if isinstance(exc, requests.HTTPError):
+            status_code = exc.response.status_code if exc.response is not None else "unknown"
+            return f"{service} request failed (status {status_code})."
+        if isinstance(exc, requests.Timeout):
+            return f"{service} request timed out."
+        if isinstance(exc, requests.ConnectionError):
+            return f"{service} request failed due to a connection issue."
+        return f"{service} request failed."
+
     def fetch_fmp_data(self, endpoint: str, ticker: str, params: Optional[Dict] = None) -> Dict:
         """Fetch data from Financial Modeling Prep API."""
         url = f"{self.FMP_BASE_URL}/{endpoint}"
         default_params = {"symbol": ticker, "apikey": self._fmp_key}
         if params:
             default_params.update(params)
-        
-        response = requests.get(url, params=default_params)
-        response.raise_for_status()
-        return response.json()
+
+        try:
+            response = requests.get(url, params=default_params)
+            response.raise_for_status()
+            return response.json()
+        except requests.RequestException as exc:
+            raise RuntimeError(self._format_request_error("FMP API", exc)) from exc
 
     def fetch_polygon_data(self, ticker: str, start_date: str, end_date: str) -> Dict:
         """Fetch historical price data from Polygon API."""
@@ -34,10 +49,13 @@ class APIClient:
             "limit": "50000",
             "apiKey": self._polygon_key
         }
-        
-        response = requests.get(url, params=params)
-        response.raise_for_status()
-        return response.json()
+
+        try:
+            response = requests.get(url, params=params)
+            response.raise_for_status()
+            return response.json()
+        except requests.RequestException as exc:
+            raise RuntimeError(self._format_request_error("Polygon API", exc)) from exc
 
 
 class DataTransformer:

@@ -3,6 +3,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 import pandas as pd
 import os
+import re
 import unittest.mock as _umock
 from dotenv import load_dotenv
 from financial_data_processor import APIClient, FinancialDataService, MetricsCalculator
@@ -82,6 +83,24 @@ def _is_mock(obj):
     (non-existent) `metric` method.
     """
     return isinstance(obj, _umock.Mock)
+
+
+def _redact_sensitive_error_text(message: str) -> str:
+    """Remove likely secret values before rendering errors in the UI."""
+    if not message:
+        return message
+
+    redacted = re.sub(
+        r"(?i)\b(api[_-]?key)\b\s*[:=]\s*['\"]?[^'\"&,\s]+",
+        r"\1=[REDACTED]",
+        message,
+    )
+    redacted = re.sub(
+        r"(?i)(apikey=|apiKey=)[^&\s]+",
+        r"\1[REDACTED]",
+        redacted,
+    )
+    return redacted
 
 
 
@@ -359,7 +378,7 @@ class DashboardApp:
             self.render_margins_section(data['income_df'])
             
         except Exception as e:
-            st.error(f"Error: {str(e)}")
+            st.error(f"Error: {_redact_sensitive_error_text(str(e))}")
 
 
 # --- APPLICATION ENTRY POINT ---
