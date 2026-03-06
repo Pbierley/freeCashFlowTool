@@ -14,6 +14,14 @@ load_dotenv()
 st.set_page_config(page_title="Stock Analysis Dashboard", layout="wide")
 
 
+@st.cache_data(ttl=900, show_spinner=False)
+def _fetch_all_financial_data_cached(ticker: str, fmp_key: str, polygon_key: str) -> dict:
+    """Cache API results per ticker to avoid repeated calls on Streamlit reruns."""
+    api_client = APIClient(fmp_key, polygon_key)
+    data_service = FinancialDataService(api_client)
+    return data_service.get_all_financial_data(ticker)
+
+
 class ChartRenderer:
     """Handles all chart rendering logic."""
 
@@ -214,6 +222,8 @@ class DashboardApp:
     """Main application controller."""
 
     def __init__(self, fmp_key: str, polygon_key: str):
+        self._fmp_key = fmp_key
+        self._polygon_key = polygon_key
         self.api_client = APIClient(fmp_key, polygon_key)
         self.data_service = FinancialDataService(self.api_client)
         self.chart_renderer = ChartRenderer()
@@ -344,7 +354,9 @@ class DashboardApp:
         
         try:
             with st.spinner(f"Fetching data for {ticker}..."):
-                data = self.data_service.get_all_financial_data(ticker)
+                data = _fetch_all_financial_data_cached(
+                    ticker, self._fmp_key, self._polygon_key
+                )
             
             # Overview
             self.metrics_display.display_overview(data['profile'], data['quote'])

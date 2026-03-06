@@ -1,5 +1,6 @@
 import pandas as pd
 import requests
+import time
 from datetime import datetime
 from typing import Dict, List, Optional
 
@@ -9,6 +10,8 @@ class APIClient:
     
     FMP_BASE_URL = "https://financialmodelingprep.com/stable"
     POLYGON_BASE_URL = "https://api.polygon.io/v2"
+    REQUEST_TIMEOUT_SECONDS = 20
+    MAX_RETRIES = 3
 
     def __init__(self, fmp_api_key: str, polygon_api_key: str):
         self._fmp_key = fmp_api_key
@@ -19,6 +22,8 @@ class APIClient:
         """Return a user-safe error string without leaking credentials."""
         if isinstance(exc, requests.HTTPError):
             status_code = exc.response.status_code if exc.response is not None else "unknown"
+            if status_code == 429:
+                return f"{service} rate limit reached (status 429). Please wait and try again."
             return f"{service} request failed (status {status_code})."
         if isinstance(exc, requests.Timeout):
             return f"{service} request timed out."
@@ -26,19 +31,45 @@ class APIClient:
             return f"{service} request failed due to a connection issue."
         return f"{service} request failed."
 
+    @staticmethod
+    def _retry_delay_seconds(response: requests.Response, attempt: int) -> float:
+        """Compute retry delay honoring Retry-After when available."""
+        retry_after = response.headers.get("Retry-After")
+        if retry_after:
+            try:
+                return max(float(retry_after), 0.0)
+            except (TypeError, ValueError):
+                pass
+        # 1s, 2s, 4s exponential backoff
+        return float(2 ** attempt)
+
+    def _request_json(self, service: str, url: str, params: Dict) -> Dict:
+        """Perform a GET request with bounded retry on HTTP 429."""
+        for attempt in range(self.MAX_RETRIES):
+            try:
+                response = requests.get(url, params=params, timeout=self.REQUEST_TIMEOUT_SECONDS)
+            except requests.RequestException as exc:
+                raise RuntimeError(self._format_request_error(service, exc)) from exc
+
+            if response.status_code == 429 and attempt < self.MAX_RETRIES - 1:
+                time.sleep(self._retry_delay_seconds(response, attempt))
+                continue
+
+            try:
+                response.raise_for_status()
+                return response.json()
+            except requests.RequestException as exc:
+                raise RuntimeError(self._format_request_error(service, exc)) from exc
+
+        raise RuntimeError(f"{service} rate limit reached (status 429). Please wait and try again.")
+
     def fetch_fmp_data(self, endpoint: str, ticker: str, params: Optional[Dict] = None) -> Dict:
         """Fetch data from Financial Modeling Prep API."""
         url = f"{self.FMP_BASE_URL}/{endpoint}"
         default_params = {"symbol": ticker, "apikey": self._fmp_key}
         if params:
             default_params.update(params)
-
-        try:
-            response = requests.get(url, params=default_params)
-            response.raise_for_status()
-            return response.json()
-        except requests.RequestException as exc:
-            raise RuntimeError(self._format_request_error("FMP API", exc)) from exc
+        return self._request_json("FMP API", url, default_params)
 
     def fetch_polygon_data(self, ticker: str, start_date: str, end_date: str) -> Dict:
         """Fetch historical price data from Polygon API."""
@@ -50,12 +81,7 @@ class APIClient:
             "apiKey": self._polygon_key
         }
 
-        try:
-            response = requests.get(url, params=params)
-            response.raise_for_status()
-            return response.json()
-        except requests.RequestException as exc:
-            raise RuntimeError(self._format_request_error("Polygon API", exc)) from exc
+        return self._request_json("Polygon API", url, params)
 
 
 class DataTransformer:
